@@ -1,0 +1,373 @@
+                                  |     1  | require 'sinatra/base'
+                                  |     2  | require 'mysql2'
+                                  |     3  | require 'mysql2-cs-bind'
+                                  |     4  | require 'tilt/erubis'
+                                  |     5  | require 'erubis'
+                                  |     6  | require 'stackprof'
+                                  |     7  | 
+                                  |     8  | 
+                                  |     9  | module Isucon5
+                                  |    10  |   class AuthenticationError < StandardError; end
+                                  |    11  |   class PermissionDenied < StandardError; end
+                                  |    12  |   class ContentNotFound < StandardError; end
+                                  |    13  |   module TimeWithoutZone
+                                  |    14  |     def to_s
+                                  |    15  |       strftime("%F %H:%M:%S")
+                                  |    16  |     end
+                                  |    17  |   end
+                                  |    18  |   ::Time.prepend TimeWithoutZone
+                                  |    19  | end
+                                  |    20  | 
+                                  |    21  | class Isucon5::WebApp < Sinatra::Base
+                                  |    22  |   use Rack::Session::Cookie
+                                  |    23  |   set :erb, escape_html: true
+                                  |    24  |   set :public_folder, File.expand_path('../../static', __FILE__)
+                                  |    25  |   #set :sessions, true
+                                  |    26  |   set :session_secret, ENV['ISUCON5_SESSION_SECRET'] || 'beermoris'
+                                  |    27  |   set :protection, true
+                                  |    28  | 
+                                  |    29  |   Dir.mkdir('/tmp/stackprof') unless File.exist?('/tmp/stackprof')
+                                  |    30  |   use StackProf::Middleware, enabled: true, mode: :cpu, interval: 1000, save_every: 100, path: '/tmp/stackprof'
+                                  |    31  | 
+                                  |    32  |   helpers do
+                                  |    33  |     def config
+                                  |    34  |       @config ||= {
+                                  |    35  |         db: {
+                                  |    36  |           host: ENV['ISUCON5_DB_HOST'] || 'localhost',
+                                  |    37  |           port: ENV['ISUCON5_DB_PORT'] && ENV['ISUCON5_DB_PORT'].to_i,
+                                  |    38  |           username: ENV['ISUCON5_DB_USER'] || 'root',
+                                  |    39  |           password: ENV['ISUCON5_DB_PASSWORD'],
+                                  |    40  |           database: ENV['ISUCON5_DB_NAME'] || 'isucon5q',
+                                  |    41  |         },
+                                  |    42  |       }
+                                  |    43  |     end
+                                  |    44  | 
+                                  |    45  |     def db
+    4    (1.2%) /     4   (1.2%)  |    46  |       return Thread.current[:isucon5_db] if Thread.current[:isucon5_db]
+                                  |    47  |       client = Mysql2::Client.new(
+                                  |    48  |         host: config[:db][:host],
+                                  |    49  |         port: config[:db][:port],
+                                  |    50  |         username: config[:db][:username],
+                                  |    51  |         password: config[:db][:password],
+                                  |    52  |         database: config[:db][:database],
+                                  |    53  |         reconnect: true,
+                                  |    54  |       )
+                                  |    55  |       client.query_options.merge!(symbolize_keys: true)
+                                  |    56  |       Thread.current[:isucon5_db] = client
+                                  |    57  |       client
+                                  |    58  |     end
+                                  |    59  | 
+                                  |    60  |     def authenticate(email, password)
+                                  |    61  |       query = <<SQL
+                                  |    62  | SELECT u.id AS id, u.account_name AS account_name, u.nick_name AS nick_name, u.email AS email
+                                  |    63  | FROM users u
+                                  |    64  | JOIN salts s ON u.id = s.user_id
+                                  |    65  | WHERE u.email = ? AND u.passhash = SHA2(CONCAT(?, s.salt), 512)
+                                  |    66  | SQL
+                                  |    67  |       result = db.xquery(query, email, password).first
+                                  |    68  |       unless result
+                                  |    69  |         raise Isucon5::AuthenticationError
+                                  |    70  |       end
+                                  |    71  |       session[:user_id] = result[:id]
+                                  |    72  |       result
+                                  |    73  |     end
+                                  |    74  | 
+                                  |    75  |     def current_user
+                                  |    76  |       return @user if @user
+                                  |    77  |       unless session[:user_id]
+                                  |    78  |         return nil
+                                  |    79  |       end
+                                  |    80  |       @user = db.xquery('SELECT id, account_name, nick_name, email FROM users WHERE id=?', session[:user_id]).first
+                                  |    81  |       unless @user
+                                  |    82  |         session[:user_id] = nil
+                                  |    83  |         session.clear
+                                  |    84  |         raise Isucon5::AuthenticationError
+                                  |    85  |       end
+                                  |    86  |       @user
+                                  |    87  |     end
+                                  |    88  | 
+                                  |    89  |     def authenticated!
+                                  |    90  |       unless current_user
+                                  |    91  |         redirect '/login'
+                                  |    92  |       end
+                                  |    93  |     end
+                                  |    94  | 
+                                  |    95  |     def get_user(user_id)
+   13    (3.8%)                   |    96  |       user = db.xquery('SELECT * FROM users WHERE id = ?', user_id).first
+                                  |    97  |       raise Isucon5::ContentNotFound unless user
+                                  |    98  |       user
+                                  |    99  |     end
+                                  |   100  | 
+                                  |   101  |     def user_from_account(account_name)
+                                  |   102  |       user = db.xquery('SELECT * FROM users WHERE account_name = ?', account_name).first
+                                  |   103  |       raise Isucon5::ContentNotFound unless user
+                                  |   104  |       user
+                                  |   105  |     end
+                                  |   106  | 
+                                  |   107  |     def is_friend?(another_id)
+   13    (3.8%)                   |   108  |       user_id = session[:user_id]
+                                  |   109  |       query = 'SELECT COUNT(1) AS cnt FROM relations WHERE (one = ? AND another = ?) OR (one = ? AND another = ?)'
+  191   (56.3%) /     4   (1.2%)  |   110  |       cnt = db.xquery(query, user_id, another_id, another_id, user_id).first[:cnt]
+   11    (3.2%) /    11   (3.2%)  |   111  |       cnt.to_i > 0 ? true : false
+                                  |   112  |     end
+                                  |   113  | 
+                                  |   114  |     def is_friend_account?(account_name)
+                                  |   115  |       is_friend?(user_from_account(account_name)[:id])
+                                  |   116  |     end
+                                  |   117  | 
+                                  |   118  |     def permitted?(another_id)
+    3    (0.9%)                   |   119  |       another_id == current_user[:id] || is_friend?(another_id)
+                                  |   120  |     end
+                                  |   121  | 
+                                  |   122  |     def mark_footprint(user_id)
+                                  |   123  |       if user_id != current_user[:id]
+                                  |   124  |         query = 'INSERT INTO footprints (user_id,owner_id) VALUES (?,?)'
+                                  |   125  |         db.xquery(query, user_id, current_user[:id])
+                                  |   126  |       end
+                                  |   127  |     end
+                                  |   128  | 
+                                  |   129  |     PREFS = %w(
+                                  |   130  |       未入力
+                                  |   131  |       北海道 青森県 岩手県 宮城県 秋田県 山形県 福島県 茨城県 栃木県 群馬県 埼玉県 千葉県 東京都 神奈川県 新潟県 富山県
+                                  |   132  |       石川県 福井県 山梨県 長野県 岐阜県 静岡県 愛知県 三重県 滋賀県 京都府 大阪府 兵庫県 奈良県 和歌山県 鳥取県 島根県
+                                  |   133  |       岡山県 広島県 山口県 徳島県 香川県 愛媛県 高知県 福岡県 佐賀県 長崎県 熊本県 大分県 宮崎県 鹿児島県 沖縄県
+                                  |   134  |     )
+                                  |   135  |     def prefectures
+                                  |   136  |       PREFS
+                                  |   137  |     end
+                                  |   138  |   end
+                                  |   139  | 
+                                  |   140  |   error Isucon5::AuthenticationError do
+                                  |   141  |     session[:user_id] = nil
+                                  |   142  |     halt 401, erubis(:login, layout: false, locals: { message: 'ログインに失敗しました' })
+                                  |   143  |   end
+                                  |   144  | 
+                                  |   145  |   error Isucon5::PermissionDenied do
+                                  |   146  |     halt 403, erubis(:error, locals: { message: '友人のみしかアクセスできません' })
+                                  |   147  |   end
+                                  |   148  | 
+                                  |   149  |   error Isucon5::ContentNotFound do
+                                  |   150  |     halt 404, erubis(:error, locals: { message: '要求されたコンテンツは存在しません' })
+                                  |   151  |   end
+                                  |   152  | 
+                                  |   153  |   get '/login' do
+                                  |   154  |     session.clear
+                                  |   155  |     erb :login, layout: false, locals: { message: '高負荷に耐えられるSNSコミュニティサイトへようこそ!' }
+                                  |   156  |   end
+                                  |   157  | 
+                                  |   158  |   post '/login' do
+                                  |   159  |     authenticate params['email'], params['password']
+                                  |   160  |     redirect '/'
+                                  |   161  |   end
+                                  |   162  | 
+                                  |   163  |   get '/logout' do
+                                  |   164  |     session[:user_id] = nil
+                                  |   165  |     session.clear
+                                  |   166  |     redirect '/login'
+                                  |   167  |   end
+                                  |   168  | 
+                                  |   169  |   get '/' do
+                                  |   170  |     authenticated!
+                                  |   171  | 
+                                  |   172  |     profile = db.xquery('SELECT * FROM profiles WHERE user_id = ?', current_user[:id]).first
+                                  |   173  | 
+                                  |   174  |     entries_query = 'SELECT * FROM entries WHERE user_id = ? ORDER BY created_at LIMIT 5'
+                                  |   175  |     entries = db.xquery(entries_query, current_user[:id])
+                                  |   176  |       .map{ |entry| entry[:is_private] = (entry[:private] == 1); entry[:title], entry[:content] = entry[:body].split(/\n/, 2); entry }
+                                  |   177  | 
+                                  |   178  |     comments_for_me_query = <<SQL
+                                  |   179  | SELECT c.id AS id, c.entry_id AS entry_id, c.user_id AS user_id, c.comment AS comment, c.created_at AS created_at
+                                  |   180  | FROM comments c
+                                  |   181  | JOIN entries e ON c.entry_id = e.id
+                                  |   182  | WHERE e.user_id = ?
+                                  |   183  | ORDER BY c.created_at DESC
+                                  |   184  | LIMIT 10
+                                  |   185  | SQL
+                                  |   186  |     comments_for_me = db.xquery(comments_for_me_query, current_user[:id])
+                                  |   187  | 
+                                  |   188  |     entries_of_friends = []
+  145   (42.8%) /    25   (7.4%)  |   189  |     db.query('SELECT * FROM entries ORDER BY created_at DESC LIMIT 1000').each do |entry|
+  118   (34.8%)                   |   190  |       next unless is_friend?(entry[:user_id])
+                                  |   191  |       entry[:title] = entry[:body].split(/\n/).first
+                                  |   192  |       entries_of_friends << entry
+    1    (0.3%) /     1   (0.3%)  |   193  |       break if entries_of_friends.size >= 10
+                                  |   194  |     end
+                                  |   195  | 
+                                  |   196  |     comments_of_friends = []
+  120   (35.4%) /    20   (5.9%)  |   197  |     db.query('SELECT * FROM comments ORDER BY created_at DESC LIMIT 1000').each do |comment|
+   94   (27.7%)                   |   198  |       next unless is_friend?(comment[:user_id])
+    2    (0.6%)                   |   199  |       entry = db.xquery('SELECT * FROM entries WHERE id = ?', comment[:entry_id]).first
+                                  |   200  |       entry[:is_private] = (entry[:private] == 1)
+    3    (0.9%)                   |   201  |       next if entry[:is_private] && !permitted?(entry[:user_id])
+                                  |   202  |       comments_of_friends << comment
+                                  |   203  |       break if comments_of_friends.size >= 10
+                                  |   204  |     end
+                                  |   205  | 
+                                  |   206  |     friends_query = 'SELECT * FROM relations WHERE one = ? OR another = ? ORDER BY created_at DESC'
+                                  |   207  |     friends_map = {}
+    8    (2.4%) /     8   (2.4%)  |   208  |     db.xquery(friends_query, current_user[:id], current_user[:id]).each do |rel|
+                                  |   209  |       key = (rel[:one] == current_user[:id] ? :another : :one)
+                                  |   210  |       friends_map[rel[key]] ||= rel[:created_at]
+                                  |   211  |     end
+                                  |   212  |     friends = friends_map.map{|user_id, created_at| [user_id, created_at]}
+                                  |   213  | 
+                                  |   214  |     query = <<SQL
+                                  |   215  | SELECT user_id, owner_id, DATE(created_at) AS date, MAX(created_at) AS updated
+                                  |   216  | FROM footprints
+                                  |   217  | WHERE user_id = ?
+                                  |   218  | GROUP BY user_id, owner_id, DATE(created_at)
+                                  |   219  | ORDER BY updated DESC
+                                  |   220  | LIMIT 10
+                                  |   221  | SQL
+                                  |   222  |     footprints = db.xquery(query, current_user[:id])
+                                  |   223  | 
+                                  |   224  |     locals = {
+                                  |   225  |       profile: profile || {},
+                                  |   226  |       entries: entries,
+                                  |   227  |       comments_for_me: comments_for_me,
+                                  |   228  |       entries_of_friends: entries_of_friends,
+                                  |   229  |       comments_of_friends: comments_of_friends,
+                                  |   230  |       friends: friends,
+                                  |   231  |       footprints: footprints
+                                  |   232  |     }
+   17    (5.0%)                   |   233  |     erb :index, locals: locals
+                                  |   234  |   end
+                                  |   235  | 
+                                  |   236  |   get '/profile/:account_name' do
+                                  |   237  |     authenticated!
+                                  |   238  |     owner = user_from_account(params['account_name'])
+                                  |   239  |     prof = db.xquery('SELECT * FROM profiles WHERE user_id = ?', owner[:id]).first
+                                  |   240  |     prof = {} unless prof
+                                  |   241  |     query = if permitted?(owner[:id])
+                                  |   242  |               'SELECT * FROM entries WHERE user_id = ? ORDER BY created_at LIMIT 5'
+                                  |   243  |             else
+                                  |   244  |               'SELECT * FROM entries WHERE user_id = ? AND private=0 ORDER BY created_at LIMIT 5'
+                                  |   245  |             end
+                                  |   246  |     entries = db.xquery(query, owner[:id])
+                                  |   247  |       .map{ |entry| entry[:is_private] = (entry[:private] == 1); entry[:title], entry[:content] = entry[:body].split(/\n/, 2); entry }
+                                  |   248  |     mark_footprint(owner[:id])
+                                  |   249  |     erb :profile, locals: { owner: owner, profile: prof, entries: entries, private: permitted?(owner[:id]) }
+                                  |   250  |   end
+                                  |   251  | 
+                                  |   252  |   post '/profile/:account_name' do
+                                  |   253  |     authenticated!
+                                  |   254  |     if params['account_name'] != current_user[:account_name]
+                                  |   255  |       raise Isucon5::PermissionDenied
+                                  |   256  |     end
+                                  |   257  |     args = [params['first_name'], params['last_name'], params['sex'], params['birthday'], params['pref']]
+                                  |   258  | 
+                                  |   259  |     prof = db.xquery('SELECT * FROM profiles WHERE user_id = ?', current_user[:id]).first
+                                  |   260  |     if prof
+                                  |   261  |       query = <<SQL
+                                  |   262  | UPDATE profiles
+                                  |   263  | SET first_name=?, last_name=?, sex=?, birthday=?, pref=?, updated_at=CURRENT_TIMESTAMP()
+                                  |   264  | WHERE user_id = ?
+                                  |   265  | SQL
+                                  |   266  |       args << current_user[:id]
+                                  |   267  |     else
+                                  |   268  |       query = <<SQL
+                                  |   269  | INSERT INTO profiles (user_id,first_name,last_name,sex,birthday,pref) VALUES (?,?,?,?,?,?)
+                                  |   270  | SQL
+                                  |   271  |       args.unshift(current_user[:id])
+                                  |   272  |     end
+                                  |   273  |     db.xquery(query, *args)
+                                  |   274  |     redirect "/profile/#{params['account_name']}"
+                                  |   275  |   end
+                                  |   276  | 
+                                  |   277  |   get '/diary/entries/:account_name' do
+                                  |   278  |     authenticated!
+                                  |   279  |     owner = user_from_account(params['account_name'])
+                                  |   280  |     query = if permitted?(owner[:id])
+                                  |   281  |               'SELECT * FROM entries WHERE user_id = ? ORDER BY created_at DESC LIMIT 20'
+                                  |   282  |             else
+                                  |   283  |               'SELECT * FROM entries WHERE user_id = ? AND private=0 ORDER BY created_at DESC LIMIT 20'
+                                  |   284  |             end
+                                  |   285  |     entries = db.xquery(query, owner[:id])
+                                  |   286  |       .map{ |entry| entry[:is_private] = (entry[:private] == 1); entry[:title], entry[:content] = entry[:body].split(/\n/, 2); entry }
+                                  |   287  |     mark_footprint(owner[:id])
+    3    (0.9%)                   |   288  |     erb :entries, locals: { owner: owner, entries: entries, myself: (current_user[:id] == owner[:id]) }
+                                  |   289  |   end
+                                  |   290  | 
+                                  |   291  |   get '/diary/entry/:entry_id' do
+                                  |   292  |     authenticated!
+                                  |   293  |     entry = db.xquery('SELECT * FROM entries WHERE id = ?', params['entry_id']).first
+                                  |   294  |     raise Isucon5::ContentNotFound unless entry
+                                  |   295  |     entry[:title], entry[:content] = entry[:body].split(/\n/, 2)
+                                  |   296  |     entry[:is_private] = (entry[:private] == 1)
+                                  |   297  |     owner = get_user(entry[:user_id])
+                                  |   298  |     if entry[:is_private] && !permitted?(owner[:id])
+                                  |   299  |       raise Isucon5::PermissionDenied
+                                  |   300  |     end
+                                  |   301  |     comments = db.xquery('SELECT * FROM comments WHERE entry_id = ?', entry[:id])
+                                  |   302  |     mark_footprint(owner[:id])
+                                  |   303  |     erb :entry, locals: { owner: owner, entry: entry, comments: comments }
+                                  |   304  |   end
+                                  |   305  | 
+                                  |   306  |   post '/diary/entry' do
+                                  |   307  |     authenticated!
+                                  |   308  |     query = 'INSERT INTO entries (user_id, private, body) VALUES (?,?,?)'
+                                  |   309  |     body = (params['title'] || "タイトルなし") + "\n" + params['content']
+                                  |   310  |     db.xquery(query, current_user[:id], (params['private'] ? '1' : '0'), body)
+                                  |   311  |     redirect "/diary/entries/#{current_user[:account_name]}"
+                                  |   312  |   end
+                                  |   313  | 
+                                  |   314  |   post '/diary/comment/:entry_id' do
+                                  |   315  |     authenticated!
+                                  |   316  |     entry = db.xquery('SELECT * FROM entries WHERE id = ?', params['entry_id']).first
+                                  |   317  |     unless entry
+                                  |   318  |       raise Isucon5::ContentNotFound
+                                  |   319  |     end
+                                  |   320  |     entry[:is_private] = (entry[:private] == 1)
+                                  |   321  |     if entry[:is_private] && !permitted?(entry[:user_id])
+                                  |   322  |       raise Isucon5::PermissionDenied
+                                  |   323  |     end
+                                  |   324  |     query = 'INSERT INTO comments (entry_id, user_id, comment) VALUES (?,?,?)'
+                                  |   325  |     db.xquery(query, entry[:id], current_user[:id], params['comment'])
+                                  |   326  |     redirect "/diary/entry/#{entry[:id]}"
+                                  |   327  |   end
+                                  |   328  | 
+                                  |   329  |   get '/footprints' do
+                                  |   330  |     authenticated!
+                                  |   331  |     query = <<SQL
+                                  |   332  | SELECT user_id, owner_id, DATE(created_at) AS date, MAX(created_at) as updated
+                                  |   333  | FROM footprints
+                                  |   334  | WHERE user_id = ?
+                                  |   335  | GROUP BY user_id, owner_id, DATE(created_at)
+                                  |   336  | ORDER BY updated DESC
+                                  |   337  | LIMIT 50
+                                  |   338  | SQL
+                                  |   339  |     footprints = db.xquery(query, current_user[:id])
+    1    (0.3%)                   |   340  |     erb :footprints, locals: { footprints: footprints }
+                                  |   341  |   end
+                                  |   342  | 
+                                  |   343  |   get '/friends' do
+                                  |   344  |     authenticated!
+                                  |   345  |     query = 'SELECT * FROM relations WHERE one = ? OR another = ? ORDER BY created_at DESC'
+                                  |   346  |     friends = {}
+                                  |   347  |     db.xquery(query, current_user[:id], current_user[:id]).each do |rel|
+                                  |   348  |       key = (rel[:one] == current_user[:id] ? :another : :one)
+                                  |   349  |       friends[rel[key]] ||= rel[:created_at]
+                                  |   350  |     end
+                                  |   351  |     list = friends.map{|user_id, created_at| [user_id, created_at]}
+    2    (0.6%)                   |   352  |     erb :friends, locals: { friends: list }
+                                  |   353  |   end
+                                  |   354  | 
+                                  |   355  |   post '/friends/:account_name' do
+                                  |   356  |     authenticated!
+                                  |   357  |     unless is_friend_account?(params['account_name'])
+                                  |   358  |       user = user_from_account(params['account_name'])
+                                  |   359  |       unless user
+                                  |   360  |         raise Isucon5::ContentNotFound
+                                  |   361  |       end
+                                  |   362  |       db.xquery('INSERT INTO relations (one, another) VALUES (?,?), (?,?)', current_user[:id], user[:id], user[:id], current_user[:id])
+                                  |   363  |       redirect '/friends'
+                                  |   364  |     end
+                                  |   365  |   end
+                                  |   366  | 
+                                  |   367  |   get '/initialize' do
+                                  |   368  |     db.query("DELETE FROM relations WHERE id > 500000")
+                                  |   369  |     db.query("DELETE FROM footprints WHERE id > 500000")
+                                  |   370  |     db.query("DELETE FROM entries WHERE id > 500000")
+                                  |   371  |     db.query("DELETE FROM comments WHERE id > 1500000")
+                                  |   372  |   end
+                                  |   373  | end
