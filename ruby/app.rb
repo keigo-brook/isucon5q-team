@@ -3,6 +3,8 @@ require 'mysql2'
 require 'mysql2-cs-bind'
 require 'tilt/erubis'
 require 'erubis'
+require 'stackprof'
+
 
 module Isucon5
   class AuthenticationError < StandardError; end
@@ -23,6 +25,9 @@ class Isucon5::WebApp < Sinatra::Base
   #set :sessions, true
   set :session_secret, ENV['ISUCON5_SESSION_SECRET'] || 'beermoris'
   set :protection, true
+
+  Dir.mkdir('/tmp/stackprof') unless File.exist?('/tmp/stackprof')
+  use StackProf::Middleware, enabled: ENV['ISUPROFILE'] ==?1, mode: :cpu, interval: 1000, save_every: 100, path: '/tmp/stackprof'
 
   helpers do
     def config
