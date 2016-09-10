@@ -1,2 +1,2 @@
-./ruby/unicorn.pid
-./ruby/log/*
+ruby/unicorn.pid
+ruby/log/*
