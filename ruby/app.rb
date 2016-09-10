@@ -27,7 +27,7 @@ class Isucon5::WebApp < Sinatra::Base
   set :protection, true
 
   Dir.mkdir('/tmp/stackprof') unless File.exist?('/tmp/stackprof')
-  use StackProf::Middleware, enabled: ENV['ISUPROFILE'] ==?1, mode: :cpu, interval: 1000, save_every: 100, path: '/tmp/stackprof'
+  use StackProf::Middleware, enabled: true, mode: :cpu, interval: 1000, save_every: 100, path: '/tmp/stackprof'
 
   helpers do
     def config

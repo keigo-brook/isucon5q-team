@@ -1,0 +1,36 @@
+==================================
+  Mode: cpu(1000)
+  Samples: 577 (0.52% miss rate)
+  GC: 51 (8.84%)
+==================================
+     TOTAL    (pct)     SAMPLES    (pct)     FRAME
+       251  (43.5%)         251  (43.5%)     block in Mysql2::Client#query
+        87  (15.1%)          87  (15.1%)     Mysql2::Client.pseudo_bind
+       447  (77.5%)          71  (12.3%)     block in <class:WebApp>
+       341  (59.1%)          30   (5.2%)     Isucon5::WebApp#is_friend?
+        17   (2.9%)          17   (2.9%)     Rack::Request#session
+       259  (44.9%)           8   (1.4%)     Mysql2::Client#query
+       302  (52.3%)           7   (1.2%)     Mysql2::Client#xquery
+        10   (1.7%)           7   (1.2%)     Erubis::XmlHelper#escape_xml
+         6   (1.0%)           5   (0.9%)     Isucon5::WebApp#db
+         5   (0.9%)           5   (0.9%)     Rack::Session::Abstract::SessionHash#loaded?
+         6   (1.0%)           4   (0.7%)     Sinatra::Base.mime_type
+        10   (1.7%)           4   (0.7%)     Rack::Session::Abstract::SessionHash#[]
+        21   (3.6%)           3   (0.5%)     Isucon5::WebApp#get_user
+         3   (0.5%)           3   (0.5%)     block in Erubis::XmlHelper#escape_xml
+         3   (0.5%)           2   (0.3%)     <module:Protection>
+         7   (1.2%)           2   (0.3%)     block in #<Module:0x0055d897ed7c70>.new
+         2   (0.3%)           2   (0.3%)     <module:Mime>
+        10   (1.7%)           2   (0.3%)     block (2 levels) in singleton class
+         1   (0.2%)           1   (0.2%)     <module:Rack>
+         1   (0.2%)           1   (0.2%)     Sinatra::Base.setup_null_logger
+         1   (0.2%)           1   (0.2%)     Rack::Session::Abstract::ID#initialize_sid
+         1   (0.2%)           1   (0.2%)     <top (required)>
+         1   (0.2%)           1   (0.2%)     <module:Protection>
+         1   (0.2%)           1   (0.2%)     <module:Protection>
+         1   (0.2%)           1   (0.2%)     #<Module:0x0055d897295200>.decode_www_form_component
+         1   (0.2%)           1   (0.2%)     Mysql2::Client#initialize
+         1   (0.2%)           1   (0.2%)     block in Sinatra::Helpers#content_type
+       172  (29.8%)           1   (0.2%)     block (2 levels) in <class:WebApp>
+         1   (0.2%)           1   (0.2%)     block in Tilt::Template#compile_template_method
+        27   (4.7%)           1   (0.2%)     block in singleton class
