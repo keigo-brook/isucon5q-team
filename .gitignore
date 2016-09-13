@@ -1,2 +1,3 @@
+.idea/*
 ruby/unicorn.pid
 ruby/log/*
